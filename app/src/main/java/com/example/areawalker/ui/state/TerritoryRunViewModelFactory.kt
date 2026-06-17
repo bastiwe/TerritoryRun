@@ -12,8 +12,9 @@ class TerritoryRunViewModelFactory(
         return TerritoryRunViewModel(
             repository = container.gameRepository,
             locationClient = container.locationClient,
+            trackingSessionManager = container.trackingSessionManager,
+            routingService = container.routingService,
             validator = container.routeValidator
         ) as T
     }
 }
-

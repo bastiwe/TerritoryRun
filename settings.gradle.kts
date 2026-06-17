@@ -16,4 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "AreaWalker"
 include(":app")
-
+include(":backend")

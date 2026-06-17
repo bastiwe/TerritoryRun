@@ -9,8 +9,13 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.example.areawalker.R
+import com.example.areawalker.core.TerritoryRunApp
 
 class TrackingForegroundService : Service() {
+    private val trackingManager by lazy {
+        (application as TerritoryRunApp).container.trackingSessionManager
+    }
+
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
@@ -18,10 +23,16 @@ class TrackingForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NotificationId, notification())
+        trackingManager.startTracking()
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        trackingManager.stopTracking()
+        super.onDestroy()
+    }
 
     private fun notification(): Notification =
         NotificationCompat.Builder(this, ChannelId)
@@ -44,4 +55,3 @@ class TrackingForegroundService : Service() {
         private const val NotificationId = 42
     }
 }
-

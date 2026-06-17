@@ -1,0 +1,30 @@
+services:
+  valhalla:
+    image: ghcr.io/valhalla/valhalla-scripted:latest
+    container_name: territory-run-valhalla
+    environment:
+      tile_urls: "https://download.bbbike.org/osm/bbbike/Muenster/Muenster.osm.pbf"
+      server_threads: "2"
+      build_elevation: "False"
+      build_admins: "True"
+      build_time_zones: "True"
+      build_tar: "True"
+      force_rebuild: "False"
+    volumes:
+      - ./valhalla-data/muenster:/custom_files
+    ports:
+      - "8002:8002"
+    restart: unless-stopped
+
+  territory-run-backend:
+    build:
+      context: ./backend
+    container_name: territory-run-backend
+    environment:
+      PORT: "8080"
+      VALHALLA_URL: "http://valhalla:8002"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - valhalla
+    restart: unless-stopped

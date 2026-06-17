@@ -43,7 +43,7 @@ class InMemoryGameApiService(
         val validatedSession = session.copy(validation = serverValidation)
         sessions += validatedSession
         if (!serverValidation.isValid) {
-            return SubmitSessionResult(false, validatedSession, null, 0, serverValidation.reasons.joinToString())
+            return SubmitSessionResult(false, validatedSession, null, 0, "Route konnte nicht gewertet werden")
         }
 
         val polygon = serverValidation.filteredPoints

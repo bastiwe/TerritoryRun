@@ -150,7 +150,17 @@ private fun MapScreen(
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Header(state)
         Spacer(Modifier.height(12.dp))
-        TerritoryMap(state.territories, state.currentPoints, Modifier.weight(1f).fillMaxWidth())
+        TerritoryMap(
+            territories = state.territories,
+            route = state.currentPoints,
+            currentLocation = state.currentLocation,
+            activeTeam = state.selectedTeam,
+            modifier = Modifier.weight(1f).fillMaxWidth()
+        )
+        state.trackingError?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, color = Color(0xFFFFB4AB))
+        }
         Spacer(Modifier.height(12.dp))
         Row {
             Button(modifier = Modifier.weight(1f), onClick = onStart, colors = primaryButtonColors()) { Text("GPS-Run starten") }
@@ -169,7 +179,13 @@ private fun TrackingScreen(state: TerritoryRunUiState, onStop: () -> Unit, onDem
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Text("Live Tracking", fontSize = 30.sp, fontWeight = FontWeight.Black, color = Color.White)
         Spacer(Modifier.height(12.dp))
-        TerritoryMap(state.territories, state.currentPoints, Modifier.weight(1f).fillMaxWidth())
+        TerritoryMap(
+            territories = state.territories,
+            route = state.currentPoints,
+            currentLocation = state.currentLocation,
+            activeTeam = state.selectedTeam,
+            modifier = Modifier.weight(1f).fillMaxWidth()
+        )
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatTile("Distanz", meters(state.distanceMeters), Modifier.weight(1f))
@@ -179,6 +195,10 @@ private fun TrackingScreen(state: TerritoryRunUiState, onStop: () -> Unit, onDem
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatTile("Speed", "${state.currentSpeedKmh.toInt()} km/h", Modifier.weight(1f))
             StatTile("GPS", state.gpsQuality, Modifier.weight(1f))
+        }
+        state.trackingError?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, color = Color(0xFFFFB4AB))
         }
         Spacer(Modifier.height(12.dp))
         Button(modifier = Modifier.fillMaxWidth().height(54.dp), onClick = onStop, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE5484D))) { Text("Stop & auswerten") }

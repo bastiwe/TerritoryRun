@@ -28,12 +28,17 @@ Players sign in, choose one of three teams and capture real-world territory by r
 
 - `app/src/main/res/values/strings.xml`
   - Replace `play_games_app_id` with the real Play Games Services game id.
+- `local.properties`
+  - Add `MAPTILER_API_KEY=your_key_here` to enable MapTiler tiles in the MapLibre map.
+  - Optional: add `ROUTING_BASE_URL=http://your-backend:8080` to use the backend routing endpoint.
 - `FakePlayGamesAuthService`
   - Replace the fake sign-in with Play Games Services v2 and backend auth-code exchange.
 - `GameApiService`
   - Replace `InMemoryGameApiService` with a real server client.
+- `RoutingService`
+  - Defaults to `FakeRoutingService`; set `ROUTING_BASE_URL` to use `BackendRoutingService`.
 - `TerritoryMap`
-  - Replace the Compose fallback renderer with an OSMDroid, MapLibre or Google Maps Compose adapter.
+  - Uses MapLibre GL Native. MapTiler is configured through `MAPTILER_API_KEY`.
 
 ## Project layout
 

@@ -4,6 +4,26 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+import java.util.Properties
+
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) {
+        file.inputStream().use(::load)
+    }
+}
+
+fun mapTilerApiKey(): String {
+    val raw = localProperties.getProperty("MAPTILER_API_KEY", "").trim()
+    return raw
+        .substringAfterLast("=")
+        .substringAfterLast("key=")
+        .trim()
+}
+
+fun routingBaseUrl(): String =
+    localProperties.getProperty("ROUTING_BASE_URL", "").trim()
+
 android {
     namespace = "com.example.areawalker"
     compileSdk = 36
@@ -14,6 +34,16 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+        buildConfigField(
+            "String",
+            "MAPTILER_API_KEY",
+            "\"${mapTilerApiKey()}\""
+        )
+        buildConfigField(
+            "String",
+            "ROUTING_BASE_URL",
+            "\"${routingBaseUrl()}\""
+        )
     }
 
     buildTypes {
@@ -37,7 +67,9 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
+
 }
 
 dependencies {
@@ -54,6 +86,8 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.google.play.services.games.v2)
     implementation(libs.google.play.services.location)
+    implementation(libs.maplibre.android)
+    implementation(libs.kotlinx.coroutines.play.services)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

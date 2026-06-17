@@ -4,30 +4,33 @@ import android.app.Activity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.areawalker.data.location.LocationClient
+import com.example.areawalker.data.location.TrackingSessionManager
 import com.example.areawalker.data.repository.GameRepository
+import com.example.areawalker.data.routing.RoutingService
 import com.example.areawalker.domain.geo.GeoAlgorithms
 import com.example.areawalker.domain.model.GpsPoint
 import com.example.areawalker.domain.model.Team
 import com.example.areawalker.domain.model.TrackSession
 import com.example.areawalker.domain.rules.RouteValidator
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
 
 class TerritoryRunViewModel(
     private val repository: GameRepository,
     private val locationClient: LocationClient,
+    private val trackingSessionManager: TrackingSessionManager,
+    private val routingService: RoutingService,
     private val validator: RouteValidator
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(TerritoryRunUiState())
     val state: StateFlow<TerritoryRunUiState> = mutableState.asStateFlow()
-
-    private var trackingJob: Job? = null
-    private var startedAtMillis: Long = 0L
+    private var elapsedTickerJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -50,6 +53,39 @@ class TerritoryRunViewModel(
         viewModelScope.launch {
             repository.territories.collect { territories ->
                 mutableState.update { it.copy(territories = territories) }
+            }
+        }
+        viewModelScope.launch {
+            trackingSessionManager.state.collect { trackingState ->
+                updateElapsedTicker(trackingState.isTracking, trackingState.startedAtMillis)
+                val points = trackingState.points
+                val latest = points.lastOrNull()
+                val speed = points.takeLast(2).takeIf { it.size == 2 }
+                    ?.let { (a, b) -> GeoAlgorithms.speedMetersPerSecond(a, b) * 3.6 }
+                    ?: 0.0
+                mutableState.update { state ->
+                    state.copy(
+                        tracking = trackingState.isTracking,
+                        currentPoints = points,
+                        distanceMeters = GeoAlgorithms.totalDistanceMeters(points),
+                        elapsedMillis = if (trackingState.startedAtMillis > 0L) {
+                            System.currentTimeMillis() - trackingState.startedAtMillis
+                        } else {
+                            state.elapsedMillis
+                        },
+                        currentSpeedKmh = speed,
+                        gpsQuality = when {
+                            trackingState.error != null -> "Fehler"
+                            latest == null && trackingState.isTracking -> "Suche GPS"
+                            latest?.isMock == true -> "Mock"
+                            latest != null && latest.accuracyMeters <= 12f -> "Sehr gut"
+                            latest != null && latest.accuracyMeters <= 30f -> "Gut"
+                            latest != null -> "Schwach"
+                            else -> state.gpsQuality
+                        },
+                        trackingError = trackingState.error
+                    )
+                }
             }
         }
     }
@@ -76,8 +112,6 @@ class TerritoryRunViewModel(
     }
 
     fun startTracking() {
-        if (trackingJob != null) return
-        startedAtMillis = System.currentTimeMillis()
         mutableState.update {
             it.copy(
                 screen = AppScreen.Tracking,
@@ -85,80 +119,103 @@ class TerritoryRunViewModel(
                 currentPoints = emptyList(),
                 distanceMeters = 0.0,
                 elapsedMillis = 0L,
-                gpsQuality = "Aktiv"
+                gpsQuality = "Aktiv",
+                trackingError = null
             )
-        }
-        trackingJob = viewModelScope.launch {
-            locationClient.locationUpdates().collect { point ->
-                appendPoint(point)
-            }
         }
     }
 
     fun stopTracking() {
-        trackingJob?.cancel()
-        trackingJob = null
-        finishSession(state.value.currentPoints)
+        elapsedTickerJob?.cancel()
+        elapsedTickerJob = null
+        val rawPoints = state.value.currentPoints
+        mutableState.update { it.copy(gpsQuality = "Route wird angepasst") }
+        viewModelScope.launch {
+            val matchedPoints = runCatching { routingService.matchRoute(rawPoints) }
+                .getOrElse { rawPoints }
+                .ifEmpty { rawPoints }
+            mutableState.update {
+                it.copy(
+                    currentPoints = matchedPoints,
+                    distanceMeters = GeoAlgorithms.totalDistanceMeters(matchedPoints),
+                    gpsQuality = if (matchedPoints != rawPoints) "Auf Wege angepasst" else "GPS"
+                )
+            }
+            finishSession(matchedPoints, rawPoints)
+        }
+    }
+
+    fun reportTrackingPermissionDenied(message: String) {
+        mutableState.update {
+            it.copy(
+                tracking = false,
+                gpsQuality = "Keine Berechtigung",
+                trackingError = message
+            )
+        }
+    }
+
+    fun refreshCurrentLocation() {
+        viewModelScope.launch {
+            runCatching { locationClient.currentLocation() }
+                .onSuccess { location ->
+                    if (location != null) {
+                        mutableState.update {
+                            it.copy(
+                                currentLocation = location,
+                                gpsQuality = when {
+                                    location.isMock -> "Mock"
+                                    location.accuracyMeters <= 12f -> "Sehr gut"
+                                    location.accuracyMeters <= 30f -> "Gut"
+                                    else -> "Schwach"
+                                },
+                                trackingError = null
+                            )
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    mutableState.update {
+                        it.copy(trackingError = error.message ?: "Aktuelle Position konnte nicht geladen werden")
+                    }
+                }
+        }
     }
 
     fun createDemoRun() {
-        val now = System.currentTimeMillis() - 6 * 60 * 1000L
-        val centerLat = 52.5206
-        val centerLon = 13.4098
-        val points = mutableListOf<GpsPoint>()
-        val shape = listOf(
-            centerLat - 0.0030 to centerLon - 0.0040,
-            centerLat - 0.0028 to centerLon + 0.0038,
-            centerLat + 0.0028 to centerLon + 0.0040,
-            centerLat + 0.0030 to centerLon - 0.0038,
-            centerLat - 0.0030 to centerLon - 0.0040
-        )
-        shape.zipWithNext().forEachIndexed { segmentIndex, (a, b) ->
-            repeat(8) { step ->
-                val ratio = step / 8.0
-                points += GpsPoint(
-                    latitude = a.first + (b.first - a.first) * ratio,
-                    longitude = a.second + (b.second - a.second) * ratio,
-                    timestampMillis = now + (segmentIndex * 8 + step) * 12_000L,
-                    accuracyMeters = 8f
+        viewModelScope.launch {
+            val demoDurationMillis = 12 * 60 * 1000L
+            val start = currentOrFallbackStart(System.currentTimeMillis() - demoDurationMillis)
+            val points = routingService.createDemoLoop(
+                start = start,
+                targetDistanceMeters = 800.0,
+                targetDurationMillis = demoDurationMillis
+            )
+            mutableState.update {
+                it.copy(
+                    screen = AppScreen.Tracking,
+                    currentPoints = points,
+                    distanceMeters = GeoAlgorithms.totalDistanceMeters(points),
+                    elapsedMillis = demoDurationMillis,
+                    gpsQuality = if (trackingSessionManager.state.value.points.isNotEmpty()) "Demo ab GPS" else "Demo"
                 )
             }
-        }
-        points += GpsPoint(shape.last().first, shape.last().second, now + 6 * 60 * 1000L, 8f)
-        mutableState.update {
-            it.copy(
-                screen = AppScreen.Tracking,
-                currentPoints = points,
-                distanceMeters = GeoAlgorithms.totalDistanceMeters(points),
-                elapsedMillis = 6 * 60 * 1000L,
-                gpsQuality = "Demo"
-            )
-        }
-        finishSession(points)
-    }
-
-    private fun appendPoint(point: GpsPoint) {
-        mutableState.update { state ->
-            val points = state.currentPoints + point
-            val speed = points.takeLast(2).takeIf { it.size == 2 }
-                ?.let { (a, b) -> GeoAlgorithms.speedMetersPerSecond(a, b) * 3.6 }
-                ?: 0.0
-            state.copy(
-                currentPoints = points,
-                distanceMeters = GeoAlgorithms.totalDistanceMeters(points),
-                elapsedMillis = System.currentTimeMillis() - startedAtMillis,
-                currentSpeedKmh = speed,
-                gpsQuality = when {
-                    point.isMock -> "Mock"
-                    point.accuracyMeters <= 12f -> "Sehr gut"
-                    point.accuracyMeters <= 30f -> "Gut"
-                    else -> "Schwach"
-                }
-            )
+            finishSession(points, points)
         }
     }
 
-    private fun finishSession(points: List<GpsPoint>) {
+    private fun currentOrFallbackStart(timestampMillis: Long): GpsPoint {
+        val current = trackingSessionManager.state.value.points.lastOrNull() ?: state.value.currentLocation
+        return current?.copy(timestampMillis = timestampMillis, accuracyMeters = 8f)
+            ?: GpsPoint(
+                latitude = 52.5206,
+                longitude = 13.4098,
+                timestampMillis = timestampMillis,
+                accuracyMeters = 8f
+            )
+    }
+
+    private fun finishSession(points: List<GpsPoint>, rawPoints: List<GpsPoint> = points) {
         val player = state.value.player ?: return
         val team = player.team ?: return
         val validation = validator.validate(points)
@@ -170,6 +227,7 @@ class TerritoryRunViewModel(
             startedAtMillis = filtered.firstOrNull()?.timestampMillis ?: System.currentTimeMillis(),
             endedAtMillis = filtered.lastOrNull()?.timestampMillis,
             points = points,
+            rawPoints = rawPoints,
             distanceMeters = GeoAlgorithms.totalDistanceMeters(filtered),
             areaSquareMeters = GeoAlgorithms.approximatePolygonAreaSquareMeters(filtered),
             validation = validation
@@ -195,5 +253,21 @@ class TerritoryRunViewModel(
             mutableState.update { it.copy(stats = repository.stats(playerId)) }
         }
     }
-}
 
+    private fun updateElapsedTicker(isTracking: Boolean, startedAtMillis: Long) {
+        if (!isTracking || startedAtMillis <= 0L) {
+            elapsedTickerJob?.cancel()
+            elapsedTickerJob = null
+            return
+        }
+        if (elapsedTickerJob != null) return
+        elapsedTickerJob = viewModelScope.launch {
+            while (true) {
+                mutableState.update {
+                    it.copy(elapsedMillis = System.currentTimeMillis() - startedAtMillis)
+                }
+                delay(1_000L)
+            }
+        }
+    }
+}
